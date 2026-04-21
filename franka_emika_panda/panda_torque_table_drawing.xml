@@ -202,7 +202,7 @@
                     <geom mesh="link7_7" material="white" class="visual" />
                     <geom mesh="link7_c" class="collision" />
                     <body name="hand" pos="0 0 0.107" quat="0.9238795 0 0 -0.3826834">
-                      <site name="grip_site" pos="0 0 0.1034" size="0.008" rgba="1 0 0 1" group="3" />
+                      <site name="grip_site" pos="0 0 0.1034" size="0.008" rgba="1 0 0 1" />
                       <inertial mass="0.73" pos="-0.01 0 0.03" diaginertia="0.001 0.0025 0.0017" />
                       <geom mesh="hand_0" material="off_white" class="visual" />
                       <geom mesh="hand_1" material="black" class="visual" />
@@ -234,7 +234,7 @@
                         <geom class="fingertip_pad_collision_4" />
                         <geom class="fingertip_pad_collision_5" />
                       </body>
-                    </body>
+                    <body name="pen" pos="0 0 0.103"><geom name="pen_shaft" type="cylinder" size="0.004 0.022" pos="0 0 0.022" rgba="0.20 0.12 0.04 1" contype="0" conaffinity="0" group="2" /><geom name="pen_ink_tip" type="cylinder" size="0.002 0.004" pos="0 0 0.048" rgba="0.0 0.0 0.0 1" contype="0" conaffinity="0" group="2" /><site name="pen_tip_site" pos="0 0 0.052" size="0.002" rgba="1 0 0 0" /></body></body>
                   </body>
                 </body>
               </body>
@@ -246,7 +246,7 @@
     <geom name="ground" type="plane" size="3 3 0.1" rgba="0.8 0.9 1 1" />
     
     
-  <body name="hanoi_table" pos="0.550000 0.000000 0.020000"><geom name="hanoi_table_geom" type="box" size="0.340000 0.450000 0.020000" rgba="0.730000 0.730000 0.770000 1.000000" friction="1.0 0.2 0.1" /></body><body name="slot_1" pos="0.500000 -0.180000 0.044000"><geom name="slot_1_geom" type="box" size="0.055000 0.055000 0.004000" rgba="0.850000 0.350000 0.350000 0.700000" friction="1.0 0.2 0.1" /></body><body name="slot_2" pos="0.500000 0.000000 0.044000"><geom name="slot_2_geom" type="box" size="0.055000 0.055000 0.004000" rgba="0.350000 0.750000 0.400000 0.700000" friction="1.0 0.2 0.1" /></body><body name="slot_3" pos="0.500000 0.180000 0.044000"><geom name="slot_3_geom" type="box" size="0.055000 0.055000 0.004000" rgba="0.350000 0.480000 0.900000 0.700000" friction="1.0 0.2 0.1" /></body><body name="block_D" pos="0.500000 -0.180000 0.068500"><freejoint name="block_D_freejoint" /><geom name="block_D_geom" type="box" size="0.020000 0.020000 0.020000" density="500.000000" rgba="0.257600 0.920000 0.566278 1.000000" friction="1.8 0.5 0.2" /><site name="D" pos="0 0 0" size="0.004" rgba="1 1 1 0" /></body><body name="block_C" pos="0.500000 -0.180000 0.109000"><freejoint name="block_C_freejoint" /><geom name="block_C_geom" type="box" size="0.020000 0.020000 0.020000" density="500.000000" rgba="0.493414 0.920000 0.257600 1.000000" friction="1.8 0.5 0.2" /><site name="C" pos="0 0 0" size="0.004" rgba="1 1 1 0" /></body><body name="block_B" pos="0.500000 -0.180000 0.149500"><freejoint name="block_B_freejoint" /><geom name="block_B_geom" type="box" size="0.020000 0.020000 0.020000" density="500.000000" rgba="0.920000 0.802093 0.257600 1.000000" friction="1.8 0.5 0.2" /><site name="B" pos="0 0 0" size="0.004" rgba="1 1 1 0" /></body><body name="block_A" pos="0.500000 -0.180000 0.190000"><freejoint name="block_A_freejoint" /><geom name="block_A_geom" type="box" size="0.020000 0.020000 0.020000" density="500.000000" rgba="0.920000 0.257600 0.257600 1.000000" friction="1.8 0.5 0.2" /><site name="A" pos="0 0 0" size="0.004" rgba="1 1 1 0" /></body></worldbody>
+  <body name="drawing_table" pos="0.550000 0.000000 0.050000"><geom type="box" size="0.300000 0.400000 0.050000" rgba="0.73 0.73 0.77 1.0" contype="0" conaffinity="0" /></body><body name="paper" pos="0.550000 0.000000 0.101000"><geom type="box" size="0.130000 0.130000 0.001000" rgba="1.0 1.0 1.0 1.0" contype="0" conaffinity="0" /></body></worldbody>
 
   <tendon>
     <fixed name="split">

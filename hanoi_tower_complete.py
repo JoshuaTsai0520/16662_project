@@ -131,7 +131,18 @@ def add_free_block(worldbody, name, pos, rgba):
             "size": f"{BLOCK_SIZE:.6f} {BLOCK_SIZE:.6f} {BLOCK_SIZE:.6f}",
             "density": f"{BLOCK_DENSITY:.6f}",
             "rgba": format_vec(rgba),
-            "friction": "1.2 0.2 0.1",
+            "friction": "1.8 0.5 0.2",
+        },
+    )
+    # Site named after the letter so mjLABEL_SITE shows the letter in the viewer
+    ET.SubElement(
+        body,
+        "site",
+        {
+            "name": name,
+            "pos": "0 0 0",
+            "size": "0.004",
+            "rgba": "1 1 1 0",
         },
     )
 
@@ -139,6 +150,13 @@ def add_free_block(worldbody, name, pos, rgba):
 def build_scene_xml(active_bottom_to_top):
     tree = ET.parse(ROOT_MODEL_XML)
     root = tree.getroot()
+
+    # Move grip_site to group 3 so we can hide it while keeping letter labels visible
+    for site_elem in root.iter("site"):
+        if site_elem.get("name") == "grip_site":
+            site_elem.set("group", "3")
+            break
+
     worldbody = root.find("worldbody")
     if worldbody is None:
         raise RuntimeError("Base Panda XML is missing <worldbody>.")
@@ -352,9 +370,9 @@ def build_move_waypoints(q_ready_start, move_ik, q_ready_end):
     ]
 
 
-def execute_waypoints(model, data, arm_idx, gripper_idx, waypoints, viewer_handle=None):
+def execute_waypoints(model, data, arm_idx, gripper_idx, waypoints, viewer_handle=None, segment_duration=SEGMENT_DURATION):
     dt = model.opt.timestep
-    segment_steps = max(1, int(SEGMENT_DURATION / dt))
+    segment_steps = max(1, int(segment_duration / dt))
     hold_steps = int(HOLD_DURATION / dt)
 
     for i in range(len(waypoints) - 1):
@@ -423,7 +441,7 @@ def settle_scene(model, data, arm_idx, gripper_idx, q_hold, grip_width, steps, v
             viewer_handle.sync()
 
 
-def run_hanoi(n_blocks, grasp_mode, viewer_enabled=True):
+def run_hanoi(n_blocks, grasp_mode, viewer_enabled=True, speed=1.0):
     active_blocks, active_bottom_to_top = get_active_blocks(n_blocks)
     scene_xml = build_scene_xml(active_bottom_to_top)
 
@@ -447,6 +465,8 @@ def run_hanoi(n_blocks, grasp_mode, viewer_enabled=True):
         q_ready = solve_ready_pose(model, data, arm_idx, ee_site, Q_HOME)
     except RuntimeError:
         q_ready = Q_HOME.copy()
+
+    seg_dur = SEGMENT_DURATION / speed
 
     def execute(viewer_handle=None):
         nonlocal q_ready
@@ -479,13 +499,15 @@ def run_hanoi(n_blocks, grasp_mode, viewer_enabled=True):
                 q_ready_end = q_ready.copy()
 
             waypoints = build_move_waypoints(q_ready, move_ik, q_ready_end)
-            execute_waypoints(model, data, arm_idx, gripper_idx, waypoints, viewer_handle)
+            execute_waypoints(model, data, arm_idx, gripper_idx, waypoints, viewer_handle, seg_dur)
 
             pegs[src].pop()
             pegs[dst].append(block_name)
             q_ready = q_ready_end.copy()
 
-            settle_scene(model, data, arm_idx, gripper_idx, q_ready, OPEN_WIDTH, 120, viewer_handle)
+            # Settle longer for taller stacks — more blocks = more wobble after placement
+            settle_steps = 150 + 80 * len(pegs[dst])
+            settle_scene(model, data, arm_idx, gripper_idx, q_ready, OPEN_WIDTH, settle_steps, viewer_handle)
 
     if viewer_enabled:
         with viewer.launch_passive(model, data) as v:
@@ -493,6 +515,8 @@ def run_hanoi(n_blocks, grasp_mode, viewer_enabled=True):
             v.cam.distance = 1.6
             v.cam.azimuth = 120
             v.cam.elevation = -24
+            v.opt.label = mj.mjtLabel.mjLABEL_SITE
+            v.opt.sitegroup[3] = 0  # hide grip_site, keep letter labels
             v.sync()
             execute(v)
             time.sleep(1.0)
@@ -513,8 +537,14 @@ def parse_args():
     parser.add_argument(
         "--n",
         type=int,
-        default=MAX_BLOCK_COUNT,
-        help=f"Total number of blocks to use (1 to {MAX_BLOCK_COUNT}).",
+        default=3,
+        help=f"Total number of blocks to use (1 to {MAX_BLOCK_COUNT}). Default: 3.",
+    )
+    parser.add_argument(
+        "--speed",
+        type=float,
+        default=1.0,
+        help="Playback speed multiplier (e.g. 2.0 = twice as fast, 0.5 = half speed).",
     )
     parser.add_argument(
         "--no-viewer",
@@ -524,7 +554,7 @@ def parse_args():
     parser.add_argument(
         "--grasp-mode",
         choices=["top", "side"],
-        default="side",
+        default="top",
         help="Choose whether the gripper performs top grasp or side grasp.",
     )
     return parser.parse_args()
@@ -532,7 +562,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    run_hanoi(n_blocks=args.n, grasp_mode=args.grasp_mode, viewer_enabled=not args.no_viewer)
+    run_hanoi(n_blocks=args.n, grasp_mode=args.grasp_mode, viewer_enabled=not args.no_viewer, speed=args.speed)
 
 
 if __name__ == "__main__":
