@@ -1,32 +1,36 @@
 """
 image_to_points.py
-Convert an input image into draw-point data for two robot drawing styles.
+Convert an input image into draw-point data for two robot drawing styles,
+and render a preview PNG showing exactly what will be drawn.
 
-  image_to_strokes()   – lines mode
-      Traces connected edge-pixels into ordered strokes using 8-connectivity.
-      Each stroke is a continuous pen-down movement.
-
-  image_to_dot_points() – dots mode
-      Samples dark pixels spread across the image and orders them with a
-      greedy nearest-neighbor pass to minimise total pen travel.
+Public API
+----------
+image_to_strokes(...)     – lines mode: connected contour strokes
+image_to_dot_points(...)  – dots mode: spread-out sampled dark pixels
+save_preview(...)         – render draw-points to a PNG for inspection
 """
 
 import numpy as np
-from PIL import Image, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 
-MAX_IMG_DIM = 150   # resize input before processing to keep edge counts manageable
+DEFAULT_RESOLUTION = 300   # default max image dimension before processing
 
 
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def _load_binary(image_path: str, threshold: int = 128, invert: bool = False) -> np.ndarray:
-    """Load image, resize if large, return boolean mask (True = draw here)."""
+def _load_binary(
+    image_path: str,
+    threshold: int = 128,
+    invert: bool = False,
+    resolution: int = DEFAULT_RESOLUTION,
+) -> np.ndarray:
+    """Load image, resize so the longer side ≤ resolution, return bool mask."""
     img = Image.open(image_path).convert("L")
     w, h = img.size
-    if max(w, h) > MAX_IMG_DIM:
-        scale = MAX_IMG_DIM / max(w, h)
+    if resolution and max(w, h) > resolution:
+        scale = resolution / max(w, h)
         nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
         img = img.resize((nw, nh), Image.LANCZOS)
     arr = np.array(img, dtype=np.uint8)
@@ -37,10 +41,8 @@ def _load_binary(image_path: str, threshold: int = 128, invert: bool = False) ->
 
 
 def _edge_mask(binary: np.ndarray) -> np.ndarray:
-    """Thin binary mask to edge pixels only (PIL FIND_EDGES)."""
     pil = Image.fromarray(binary.astype(np.uint8) * 255, mode="L")
-    edges = pil.filter(ImageFilter.FIND_EDGES)
-    return np.array(edges, dtype=np.uint8) > 32
+    return np.array(pil.filter(ImageFilter.FIND_EDGES), dtype=np.uint8) > 32
 
 
 # ---------------------------------------------------------------------------
@@ -49,12 +51,9 @@ def _edge_mask(binary: np.ndarray) -> np.ndarray:
 
 def _trace_contours(mask: np.ndarray) -> list[np.ndarray]:
     """
-    Trace connected components in *mask* into ordered stroke pixel sequences.
-
-    Uses 8-connectivity.  At each step the tracer picks the unvisited neighbor
-    that best continues the current travel direction, keeping curves smooth.
-
-    Returns a list of (K, 2) float arrays, each row (x, y) in pixels.
+    Trace connected edge-pixels into ordered stroke sequences (8-connectivity).
+    At each step picks the neighbor that best continues the current direction.
+    Returns list of (K, 2) float arrays with (x, y) pixel coords.
     """
     ys, xs = np.where(mask)
     if len(xs) == 0:
@@ -99,15 +98,15 @@ def _subsample_strokes(strokes: list[np.ndarray], max_points: int) -> list[np.nd
     if total <= max_points:
         return strokes
     ratio = max_points / total
-    result = []
+    out = []
     for s in strokes:
         k = max(2, int(len(s) * ratio))
         if k >= len(s):
-            result.append(s)
+            out.append(s)
         else:
             idx = np.round(np.linspace(0, len(s) - 1, k)).astype(int)
-            result.append(s[idx])
-    return result
+            out.append(s[idx])
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +132,7 @@ def _nearest_neighbor_order(points: np.ndarray) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Public API — image → draw-points
 # ---------------------------------------------------------------------------
 
 def image_to_strokes(
@@ -141,17 +140,24 @@ def image_to_strokes(
     max_points: int = 500,
     threshold: int = 128,
     invert: bool = False,
+    resolution: int = DEFAULT_RESOLUTION,
 ) -> tuple[list[np.ndarray], tuple[int, int]]:
     """
-    Lines mode: image → list of normalized contour strokes.
+    Lines mode: image → list of normalised contour strokes.
 
-    Each stroke is a (K, 2) ndarray of (x_norm, y_norm) ∈ [0, 1]² that
-    should be drawn as one continuous pen-down movement.
-    x_norm=0 → left edge; y_norm=0 → top edge.
+    Parameters
+    ----------
+    resolution : int
+        Resize the input image so its longer side is at most this many pixels
+        before edge-detection.  Higher values → finer strokes, more points,
+        slower IK.  Default 150.
 
-    Returns (strokes, (height, width)) of the resized working image.
+    Returns
+    -------
+    strokes   : list of (K, 2) float arrays, each row (x_norm, y_norm) ∈ [0,1]²
+    img_shape : (height, width) of the resized working image
     """
-    binary    = _load_binary(image_path, threshold, invert)
+    binary    = _load_binary(image_path, threshold, invert, resolution)
     h, w      = binary.shape
     stroke_px = _trace_contours(_edge_mask(binary))
 
@@ -175,17 +181,23 @@ def image_to_dot_points(
     max_points: int = 400,
     threshold: int = 128,
     invert: bool = False,
+    resolution: int = DEFAULT_RESOLUTION,
 ) -> tuple[np.ndarray, tuple[int, int]]:
     """
-    Dots mode: image → flat (N, 2) array of normalized draw-points.
+    Dots mode: image → flat (N, 2) array of normalised draw-points.
 
-    Samples dark pixels spread across the full image (not just edges),
-    sub-samples to max_points, then reorders with nearest-neighbor to
-    minimise pen travel between dots.
+    Parameters
+    ----------
+    resolution : int
+        Resize the input image so its longer side is at most this many pixels
+        before sampling.  Higher values → denser/finer dot grid.  Default 150.
 
-    Returns (points, (height, width)) of the resized working image.
+    Returns
+    -------
+    points    : (N, 2) float array, each row (x_norm, y_norm) ∈ [0,1]²
+    img_shape : (height, width) of the resized working image
     """
-    binary = _load_binary(image_path, threshold, invert)
+    binary = _load_binary(image_path, threshold, invert, resolution)
     h, w   = binary.shape
 
     ys, xs = np.where(binary)
@@ -193,27 +205,88 @@ def image_to_dot_points(
         return np.zeros((0, 2), dtype=float), (h, w)
 
     points = np.column_stack([xs.astype(float), ys.astype(float)])
-
     if len(points) > max_points:
         idx    = np.round(np.linspace(0, len(points) - 1, max_points)).astype(int)
         points = points[idx]
 
     points = _nearest_neighbor_order(points)
-
     points[:, 0] /= max(w - 1, 1)
     points[:, 1] /= max(h - 1, 1)
     return points, (h, w)
 
 
+# ---------------------------------------------------------------------------
+# Preview renderer
+# ---------------------------------------------------------------------------
+
+def save_preview(
+    draw_data,              # list[ndarray] for lines, ndarray for dots
+    style: str,             # "lines" or "dots"
+    output_path: str,
+    canvas_px: int = 512,   # preview image side length in pixels
+    line_width: int = 2,    # pixel width of strokes (lines mode)
+    dot_radius: int = 4,    # pixel radius of dots   (dots mode)
+) -> None:
+    """
+    Render the draw-points onto a white PNG canvas and save it.
+
+    The canvas uses the same (x_norm, y_norm) coordinate system as the
+    normalised draw-points: x left→right, y top→bottom.  The result shows
+    exactly what the robot arm will draw on the paper.
+
+    Parameters
+    ----------
+    draw_data   : strokes (list of arrays) for lines mode,
+                  flat point array for dots mode.
+    style       : "lines" or "dots"
+    output_path : where to write the PNG
+    canvas_px   : side length of the square preview image (default 512)
+    line_width  : stroke width in pixels, lines mode only
+    dot_radius  : dot radius in pixels, dots mode only
+    """
+    img  = Image.new("RGB", (canvas_px, canvas_px), "white")
+    draw = ImageDraw.Draw(img)
+    N    = canvas_px - 1
+
+    def to_px(nx: float, ny: float) -> tuple[int, int]:
+        return (int(nx * N), int(ny * N))
+
+    if style == "lines":
+        for stroke in draw_data:
+            if len(stroke) == 0:
+                continue
+            if len(stroke) == 1:
+                px, py = to_px(stroke[0][0], stroke[0][1])
+                r = max(1, line_width)
+                draw.ellipse([px - r, py - r, px + r, py + r], fill="black")
+            else:
+                pts = [to_px(pt[0], pt[1]) for pt in stroke]
+                draw.line(pts, fill="black", width=max(1, line_width))
+    else:  # dots
+        for pt in draw_data:
+            px, py = to_px(float(pt[0]), float(pt[1]))
+            r = max(1, dot_radius)
+            draw.ellipse([px - r, py - r, px + r, py + r], fill="black")
+
+    img.save(output_path)
+    print(f"[preview] saved → {output_path}  ({canvas_px}×{canvas_px} px)")
+
+
+# ---------------------------------------------------------------------------
+# Compatibility shim
+# ---------------------------------------------------------------------------
+
 def image_to_draw_points(
     image_path: str,
-    max_points: int = 500,
+    max_points: int = 800,
     threshold: int = 128,
     invert: bool = False,
+    resolution: int = DEFAULT_RESOLUTION,
     **_kwargs,
 ) -> tuple[np.ndarray, tuple[int, int]]:
     """Compatibility shim — returns flat point array using strokes pipeline."""
-    strokes, shape = image_to_strokes(image_path, max_points, threshold, invert)
+    strokes, shape = image_to_strokes(
+        image_path, max_points, threshold, invert, resolution)
     if not strokes:
         return np.zeros((0, 2), dtype=float), shape
     return np.vstack(strokes), shape
