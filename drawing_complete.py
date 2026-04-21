@@ -6,15 +6,9 @@ Before the simulation starts the processed draw-points are rendered to a PNG
 preview file (<input_stem>_preview.png) so you can check the output before
 committing to the full robot run.
 
-Two drawing styles are available via --style:
-
-  lines  (default)
-      Contour-traces image edges into connected strokes.  The pen moves
-      continuously along each stroke; ink marks form a dense sphere chain.
-
-  dots
-      Samples dark pixels across the image.  The arm stamps a single sphere
-      at each dot position for a pointillist look.
+Drawing style: dots
+    Samples dark pixels across the image.  The arm stamps a single sphere
+    at each dot position for a pointillist look.
 
 Resolution and mark size are exposed as CLI flags so you can tune the output
 without editing source code.
@@ -30,7 +24,7 @@ import numpy as np
 from mujoco import viewer
 
 import RobotUtil as rt
-from image_to_points import image_to_strokes, image_to_dot_points, save_preview
+from image_to_points import image_to_dot_points, save_preview
 
 
 # ---------------------------------------------------------------------------
@@ -85,9 +79,7 @@ DRAW_ROT = np.array([
 # ---------------------------------------------------------------------------
 # Ink-mark defaults (overridden at runtime by --mark-size)
 # ---------------------------------------------------------------------------
-_DEFAULT_MARK_SIZE_LINE = 0.0018   # sphere radius for lines (m)
-_DEFAULT_MARK_SIZE_DOT  = 0.0045   # sphere radius for dots  (m)
-MARK_INTERVAL = 8                  # add one mark every N sim steps (lines mode)
+_DEFAULT_MARK_SIZE_DOT = 0.0045   # sphere radius for dots (m)
 
 _MARK_RGBA = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
 _EYE3      = np.eye(3, dtype=np.float64).flatten()
@@ -241,10 +233,6 @@ def execute_segment(
     model, data, arm_idx, gripper_idx,
     q_start, q_goal, duration, v=None,
     hold_secs=HOLD_DURATION,
-    mark_every=0,        # >0 → stamp ink sphere every N sim steps
-    mark_scn=None,
-    mark_site_id=None,
-    mark_size=_DEFAULT_MARK_SIZE_LINE,
 ):
     dt      = model.opt.timestep
     n_steps = max(1, int(duration / dt))
@@ -258,16 +246,13 @@ def execute_segment(
         data.ctrl[arm_idx]     = tau + data.qfrc_bias[:7]
         data.ctrl[gripper_idx] = PEN_HOLD_WIDTH
         mj.mj_step(model, data)
-        if mark_every > 0 and mark_scn is not None and mark_site_id is not None:
-            if step % mark_every == 0:
-                _add_ink_mark(mark_scn, data.site_xpos[mark_site_id].copy(), mark_size)
         if v is not None:
             v.sync()
         t += dt
 
 
 # ---------------------------------------------------------------------------
-# Drawing routines
+# Drawing routine
 # ---------------------------------------------------------------------------
 def _settle(model, data, arm_idx, gripper_idx, v):
     for _ in range(400):
@@ -279,50 +264,6 @@ def _settle(model, data, arm_idx, gripper_idx, v):
         mj.mj_step(model, data)
         if v is not None:
             v.sync()
-
-
-def _draw_lines(model, data, arm_idx, gripper_idx, site_id,
-                strokes, seg, v, mark_size):
-    scn   = v.user_scn if v is not None else None
-    q_cur = Q_HOME.copy()
-
-    for si, stroke in enumerate(strokes):
-        print(f"[sim] stroke {si+1}/{len(strokes)}  ({len(stroke)} pts)", flush=True)
-        for pi, pt in enumerate(stroke):
-            wp = norm_to_world(pt[0], pt[1])
-            if pi == 0:
-                hover = wp.copy(); hover[2] = LIFT_Z
-                q_hov = solve_ik(model, data, site_id, q_cur, hover, arm_idx)
-                execute_segment(model, data, arm_idx, gripper_idx,
-                                q_cur, q_hov, seg, v)
-                q_draw = solve_ik(model, data, site_id, q_hov, wp, arm_idx)
-                execute_segment(model, data, arm_idx, gripper_idx,
-                                q_hov, q_draw, seg * 0.4, v,
-                                mark_every=MARK_INTERVAL,
-                                mark_scn=scn, mark_site_id=site_id,
-                                mark_size=mark_size)
-                q_cur = q_draw
-            else:
-                prev = norm_to_world(stroke[pi-1][0], stroke[pi-1][1])
-                dist = float(np.linalg.norm(wp[:2] - prev[:2]))
-                dur  = float(np.clip(dist / 0.08, 0.15, seg * 0.5))
-                q_draw = solve_ik(model, data, site_id, q_cur, wp, arm_idx)
-                execute_segment(model, data, arm_idx, gripper_idx,
-                                q_cur, q_draw, dur, v,
-                                hold_secs=0.0,
-                                mark_every=MARK_INTERVAL,
-                                mark_scn=scn, mark_site_id=site_id,
-                                mark_size=mark_size)
-                q_cur = q_draw
-
-        last = norm_to_world(stroke[-1][0], stroke[-1][1])
-        lift = last.copy(); lift[2] = LIFT_Z
-        q_lift = solve_ik(model, data, site_id, q_cur, lift, arm_idx)
-        execute_segment(model, data, arm_idx, gripper_idx,
-                        q_cur, q_lift, seg * 0.4, v)
-        q_cur = q_lift
-
-    return q_cur
 
 
 def _draw_dots(model, data, arm_idx, gripper_idx, site_id,
@@ -373,7 +314,6 @@ def _draw_dots(model, data, arm_idx, gripper_idx, site_id,
 # ---------------------------------------------------------------------------
 def run_drawing(
     image_path: str,
-    style: str = "lines",
     max_points: int = 400,
     threshold: int = 128,
     invert: bool = False,
@@ -393,36 +333,22 @@ def run_drawing(
         Multiplier applied to the default ink-sphere radius.
         1.0 = default, 0.5 = thinner marks, 2.0 = thicker marks.
     """
-    mark_size = (
-        _DEFAULT_MARK_SIZE_LINE if style == "lines" else _DEFAULT_MARK_SIZE_DOT
-    ) * mark_size_scale
+    mark_size = _DEFAULT_MARK_SIZE_DOT * mark_size_scale
 
     # ---- image → draw-points -------------------------------------------
-    print(f"[image] loading '{image_path}'  style={style}  resolution={resolution}")
-    if style == "lines":
-        strokes, img_shape = image_to_strokes(
-            image_path, max_points=max_points, threshold=threshold,
-            invert=invert, resolution=resolution)
-        total = sum(len(s) for s in strokes)
-        print(f"[image] shape={img_shape}  {len(strokes)} strokes  {total} pts")
-        if total == 0:
-            print("[image] No draw-points found — check --threshold / --invert.")
-            return
-        draw_data = strokes
-    else:
-        dot_points, img_shape = image_to_dot_points(
-            image_path, max_points=max_points, threshold=threshold,
-            invert=invert, resolution=resolution)
-        print(f"[image] shape={img_shape}  {len(dot_points)} dot positions")
-        if len(dot_points) == 0:
-            print("[image] No dark pixels found — check --threshold / --invert.")
-            return
-        draw_data = dot_points
+    print(f"[image] loading '{image_path}'  resolution={resolution}")
+    dot_points, img_shape = image_to_dot_points(
+        image_path, max_points=max_points, threshold=threshold,
+        invert=invert, resolution=resolution)
+    print(f"[image] shape={img_shape}  {len(dot_points)} dot positions")
+    if len(dot_points) == 0:
+        print("[image] No dark pixels found — check --threshold / --invert.")
+        return
 
     # ---- save preview image BEFORE simulation --------------------------
     stem         = Path(image_path).stem
     preview_path = f"{stem}_preview.png"
-    save_preview(draw_data, style, preview_path)   # prints its own status line
+    save_preview(dot_points, preview_path)   # prints its own status line
 
     # ---- MuJoCo scene --------------------------------------------------
     scene_xml   = build_scene_xml()
@@ -443,12 +369,8 @@ def run_drawing(
         print("[sim] settling at home …")
         _settle(model, data, arm_idx, gripper_idx, v)
 
-        if style == "lines":
-            q_end = _draw_lines(model, data, arm_idx, gripper_idx,
-                                site_id, strokes, seg, v, mark_size)
-        else:
-            q_end = _draw_dots(model, data, arm_idx, gripper_idx,
-                               site_id, dot_points, seg, v, mark_size)
+        q_end = _draw_dots(model, data, arm_idx, gripper_idx,
+                           site_id, dot_points, seg, v, mark_size)
 
         print("[sim] returning home …")
         execute_segment(model, data, arm_idx, gripper_idx,
@@ -474,15 +396,15 @@ def run_drawing(
 # ---------------------------------------------------------------------------
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Franka Panda draws a picture from an input image in MuJoCo.",
+        description="Franka Panda draws a picture from an input image in MuJoCo (dots style).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Resolution and mark-size guide
 -------------------------------
 --resolution N   (default 150)
   The input image is resized so its longer side is at most N pixels before
-  edge-detection / pixel sampling.  Increasing N raises detail but also raises
-  point count and IK time.
+  pixel sampling.  Increasing N raises detail but also raises point count
+  and IK time.
 
     50  → very coarse sketch (~50–150 pts)
    150  → default, good balance
@@ -494,15 +416,12 @@ Resolution and mark-size guide
 
     0.3 → hairline marks
     1.0 → default
-    2.0 → bold strokes / large dots
+    2.0 → bold dots
     3.0 → very fat marks
 """,
     )
     p.add_argument("image",
                    help="Input image path (PNG, JPG, BMP, …).")
-    p.add_argument("--style", choices=["lines", "dots"], default="lines",
-                   help="'lines' traces contour strokes; 'dots' stamps point marks "
-                        "(default: lines).")
     p.add_argument("--max-points", type=int, default=400,
                    help="Max draw-points extracted from the image (default: 400).")
     p.add_argument("--threshold", type=int, default=128,
@@ -527,7 +446,6 @@ def main():
     args = parse_args()
     run_drawing(
         image_path      = args.image,
-        style           = args.style,
         max_points      = args.max_points,
         threshold       = args.threshold,
         invert          = args.invert,
